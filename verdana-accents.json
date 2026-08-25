@@ -1,0 +1,25 @@
+{
+ "bold": {
+  "00CC": -67,
+  "00CD": 55,
+  "00CE": 0,
+  "00CF": 0,
+  "0128": 3,
+  "012A": 0,
+  "012C": 2,
+  "0130": -1,
+  "0134": -166
+ },
+ "note": "accent centre minus stem centre, font units (2048/em), measured from rasterised glyphs",
+ "regular": {
+  "00CC": -74,
+  "00CD": 82,
+  "00CE": 4,
+  "00CF": 1,
+  "0128": 1,
+  "012A": 0,
+  "012C": 1,
+  "0130": 0,
+  "0134": -143
+ }
+}
