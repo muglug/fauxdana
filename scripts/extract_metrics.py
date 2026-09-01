@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """extract_metrics.py REGULAR.ttf BOLD.ttf ITALIC.ttf BOLDITALIC.ttf OUT.json
 
-Reads the metrics Dejardana reproduces from a reference family: per code
+Reads the metrics Fauxdana reproduces from a reference family: per code
 point the advance width and ink box (xMin, xMax) of each weight, and the
 hhea / OS/2 vertical metrics, so the face can be rebuilt from the JSON
 without the reference font at hand. Written for Verdana; any TrueType family

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""make_dejardana.py DEJAVUSANS.ttf METRICS.json OUT.ttf [--bold] [--italic] [--accents ACCENTS.json]
+"""make_fauxdana.py DEJAVUSANS.ttf METRICS.json OUT.ttf [--bold] [--italic] [--accents ACCENTS.json]
 
 Derives a Verdana-metric-compatible face from DejaVu Sans (the built TTF of
 this repository's DejaVuSans.sfd / DejaVuSans-Bold.sfd) and the reference
@@ -31,7 +31,7 @@ from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.basePen import BasePen
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 
-FAMILY = "Dejardana"
+FAMILY = "Fauxdana"
 
 class MapPen(BasePen):
     """Forwards an outline to another pen with every point run through fn."""
@@ -316,7 +316,7 @@ def main():
     name_table = font["name"]
     copyright_ = name_table.getDebugName(0) or ""
     records = {
-        0: copyright_ + " Dejardana: a metric-compatible derivative (advance widths and vertical metrics of Verdana) for Slack's document previews; renamed as the Bitstream Vera and DejaVu licences require.",
+        0: copyright_ + " Fauxdana: a metric-compatible derivative (advance widths and vertical metrics of Verdana) for Slack's document previews; renamed as the Bitstream Vera and DejaVu licences require.",
         1: FAMILY, 2: style, 3: f"{FAMILY} {style}; 1.000", 4: f"{FAMILY} {style}".replace(" Regular", ""),
         5: "Version 1.000", 6: f"{FAMILY}-{style.replace(' ', '')}", 16: FAMILY, 17: style,
     }

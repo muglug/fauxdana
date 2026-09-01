@@ -4,7 +4,7 @@
 Measures where a reference family places the accents over its capital I
 (and J): the horizontal offset, in font units, of the accent's centre from
 the stem's centre, read off rasterised glyphs (ImageMagick + Pillow).
-Dejardana moves DejaVu's accents to the same offsets so the accented capitals
+Fauxdana moves DejaVu's accents to the same offsets so the accented capitals
 match too."""
 import json
 import subprocess
