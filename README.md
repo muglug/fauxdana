@@ -29,7 +29,7 @@ font. Fauxdana is distributed under the SIL Open Font License 1.1; see
 |---|---|
 | `ttfs/Fauxdana-{Regular,Bold,Italic,BoldItalic}.ttf` | the fonts |
 | `scripts/make_fauxdana.py` | builds one face from a DejaVu Sans TTF and the reference measurements |
-| `scripts/extract_metrics.py` → `verdana-metrics.json` | advance widths, ink extents and vertical metrics of the reference family's four styles |
+| `scripts/extract_metrics.py` → `verdana-metrics.json` | advance widths, ink extents, kerning pairs, and vertical, caret, line-decoration and sub/superscript metrics of the reference family's four styles |
 | `scripts/measure_accents.py` → `verdana-accents.json` | accent offsets over I and J, read off rasterised glyphs |
 | `scripts/build.sh` | rebuilds all four faces into `ttfs/` |
 | `dejavu-fonts/` | the DejaVu Sans sources, as a submodule pinned to release 2.37 |

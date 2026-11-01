@@ -12,26 +12,37 @@ hook lifted onto the baseline (stroke weights untouched: the part below a
 cut through the straight stem moves up, only the flat stretch of the hook
 scales horizontally), lowercase j the same tail plus Verdana's top-left
 serif; accents over I and J are placed at the offsets from the stem that
-the reference family uses (scripts/measure_accents.py → verdana-accents.json). For the
-oblique sources the letters are un-slanted by the face's italic angle before
-they are reshaped and slanted back afterwards, so the lifted hook stays on
-its stem and the bars come out as parallelograms. Vertical metrics (hhea, OS/2) are Verdana's so line boxes match.
-Kerning and layout tables are dropped: the face exists to reproduce Word's
-advance-based layout. Renamed as the Bitstream Vera / DejaVu licence
-requires for modified fonts; the original copyright and licence travel in
-the name table.
+the reference family uses (scripts/measure_accents.py → verdana-accents.json). The
+oblique sources are first re-slanted from DejaVu's 11° to the reference's
+italic angle (Verdana Italic leans 13°), so slanted ink boxes compare like
+with like and the caret slope and italic angle are the reference's; the
+letters are then un-slanted by that angle before they are reshaped and
+slanted back afterwards, so the lifted hook stays on its stem and the bars
+come out as parallelograms. Vertical metrics (hhea, OS/2) are Verdana's so
+line boxes match, and so are the underline, strikeout, subscript and
+superscript metrics and the average character width. DejaVu's own kerning
+and layout tables are dropped; the reference's kerning pairs take their
+place, written to the same table(s) the reference carries them in (Verdana:
+a legacy 'kern' table in the regular face only), so every layout engine
+that kerns Verdana kerns Fauxdana identically and every one that does not
+kern Verdana leaves Fauxdana unkerned too. Renamed as the Bitstream Vera /
+DejaVu licence requires for modified fonts; the original copyright and
+licence travel in the name table.
 """
 import json
 import math
 import sys
 import unicodedata
-from fontTools.ttLib import TTFont
+from fontTools.ttLib import TTFont, newTable
+from fontTools.ttLib.tables._k_e_r_n import KernTable_format_0
+from fontTools.feaLib.builder import addOpenTypeFeaturesFromString
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.basePen import BasePen
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 
 FAMILY = "Fauxdana"
+VERSION = "1.100"
 
 class MapPen(BasePen):
     """Forwards an outline to another pen with every point run through fn."""
@@ -74,6 +85,48 @@ def upright_ink(glyf, name):
     ys = [y for _, y in coords]
     return min(xs), max(xs), min(ys), max(ys)
 
+def shear_all(font, glyph_set, shear):
+    """Slants every outline further by `shear` (x += shear * y, about the
+    baseline). Composites keep their structure where they can: a plain
+    offset component moves with the shear of its offset; components that are
+    scaled, flipped or attached by anchor points are decomposed first."""
+    glyf, hmtx = font["glyf"], font["hmtx"]
+    order = font.getGlyphOrder()
+    for name in order:
+        g = glyf[name]
+        if g.isComposite() and any(hasattr(c, "transform") or not hasattr(c, "x") for c in g.components):
+            pen = TTGlyphPen(None)
+            recording = DecomposingRecordingPen(glyph_set)
+            glyph_set[name].draw(recording)
+            recording.replay(pen)
+            glyf[name] = pen.glyph()
+    for name in order:
+        g = glyf[name]
+        if g.isComposite():
+            for c in g.components:
+                c.x = round(c.x + shear * c.y)
+        elif g.numberOfContours > 0:
+            g.coordinates.transform(((1, 0), (shear, 1)))
+            g.coordinates.toInt()
+    for name in order:                   # composites' bounds follow their (sheared) parts
+        g = glyf[name]
+        if g.numberOfContours:
+            g.recalcBounds(glyf)
+            hmtx[name] = (hmtx[name][0], g.xMin)
+
+def kerning(cmap, pairs_by_code, tag):
+    """The reference's kerning pairs ('LLLL RRRR' code points → value) as
+    Fauxdana glyph pairs; pairs with a code point Fauxdana lacks are skipped."""
+    pairs = {}
+    for code_pair, value in pairs_by_code.items():
+        left, right = (cmap.get(int(code, 16)) for code in code_pair.split())
+        if left is None or right is None:
+            continue
+        if pairs.get((left, right), value) != value:
+            raise SystemExit(f"{tag}: conflicting kerning for {left} {right}")
+        pairs[(left, right)] = value
+    return pairs
+
 def main():
     global SLANT
     argv = sys.argv[1:]
@@ -94,6 +147,14 @@ def main():
     # The reference's own slant (Verdana Italic leans 13°, DejaVu Oblique 11°):
     # its slanted ink widths are reduced to upright widths by it.
     ref_slant = -math.tan(math.radians(ref.get("italicAngle", 0.0))) if italic else 0.0
+    # Lean the oblique as far as the reference does before anything is
+    # measured: compared at different slants, every tall glyph's ink looks
+    # too narrow and would be stretched to make up the difference.
+    source_angle = font["post"].italicAngle
+    if italic and ref_slant and abs(ref_slant - SLANT) > 1e-6:
+        shear_all(font, glyph_set, ref_slant - SLANT)
+        SLANT = ref_slant
+        font["post"].italicAngle = ref["italicAngle"]
     def ref_upright_width(code, height):
         box = ref_ink(code)
         return None if box is None else (box[1] - box[0]) - height * ref_slant
@@ -302,23 +363,40 @@ def main():
             g.recalcBounds(glyf)
             hmtx[name] = (hmtx[name][0], g.xMin)
 
-    # --- Vertical metrics from Verdana.
-    for table in ("hhea", "OS/2"):
-        for field, value in ref[table].items():
-            setattr(font[table], field, value)
+    # --- Vertical metrics, caret slope, underline / strikeout / subscript /
+    # superscript metrics and average width from Verdana (the measured
+    # average after recalculation is overridden by the reference's, which
+    # some layouts use as the width of a "character" unit).
     font["OS/2"].recalcAvgCharWidth(font)
+    for table in ("hhea", "OS/2", "post"):
+        for field, value in ref.get(table, {}).items():
+            setattr(font[table], field, value)
     for tag in ("GPOS", "GSUB", "kern", "GDEF", "morx", "feat"):
         if tag in font:
             del font[tag]
+
+    # --- Kerning: the reference's pairs, in the same table(s) it uses.
+    kern_pairs = kerning(cmap, ref.get("kern", {}), "kern")
+    if kern_pairs:
+        assert len(kern_pairs) <= (0xFFFF - 14) // 6, "too many pairs for one format 0 subtable"
+        sub = KernTable_format_0()
+        sub.coverage, sub.kernTable = 1, kern_pairs   # horizontal kerning values
+        font["kern"] = newTable("kern")
+        font["kern"].version, font["kern"].kernTables = 0, [sub]
+    gpos_pairs = kerning(cmap, ref.get("gposKern", {}), "GPOS")
+    if gpos_pairs:
+        rules = "\n".join(f"  pos \\{l} \\{r} {v};" for (l, r), v in sorted(gpos_pairs.items()))
+        addOpenTypeFeaturesFromString(font, "languagesystem DFLT dflt;\nlanguagesystem latn dflt;\n"
+                                            f"feature kern {{\n{rules}\n}} kern;\n")
 
     # --- Names.
     style = {"regular": "Regular", "bold": "Bold", "italic": "Italic", "boldItalic": "Bold Italic"}[style_key]
     name_table = font["name"]
     copyright_ = name_table.getDebugName(0) or ""
     records = {
-        0: copyright_ + " Fauxdana: a metric-compatible derivative (advance widths and vertical metrics of Verdana) for Slack's document previews; renamed as the Bitstream Vera and DejaVu licences require.",
-        1: FAMILY, 2: style, 3: f"{FAMILY} {style}; 1.000", 4: f"{FAMILY} {style}".replace(" Regular", ""),
-        5: "Version 1.000", 6: f"{FAMILY}-{style.replace(' ', '')}", 16: FAMILY, 17: style,
+        0: copyright_ + " Fauxdana: a metric-compatible derivative (advance widths, kerning and vertical metrics of Verdana) for Slack's document previews; renamed as the Bitstream Vera and DejaVu licences require.",
+        1: FAMILY, 2: style, 3: f"{FAMILY} {style}; {VERSION}", 4: f"{FAMILY} {style}".replace(" Regular", ""),
+        5: f"Version {VERSION}", 6: f"{FAMILY}-{style.replace(' ', '')}", 16: FAMILY, 17: style,
     }
     for rec in list(name_table.names):
         if rec.nameID in records:
@@ -326,14 +404,15 @@ def main():
     for nid, value in records.items():
         if not name_table.getName(nid, 3, 1, 0x409):
             name_table.setName(value, nid, 3, 1, 0x409)
-    font["head"].fontRevision = 1.0
+    font["head"].fontRevision = float(VERSION)
     font["OS/2"].achVendID = "SLAK"
     # Deterministic output: keep the source's timestamps instead of stamping
     # the build time (fontTools rewrites head.modified on save unless told
     # not to), so identical inputs rebuild byte-identical fonts.
     font.recalcTimestamp = False
     font.save(out)
-    print(f"{out}: {shared} glyphs took Verdana's metrics ({scaled} scaled); stem {stem}, I bars {bar_t}x{bar_ext}; J lift {lift}, shift {shift_J}, hook stretch {stretch_J:.2f}; j shift {shift_j}, stretch {stretch_j:.2f}, serif {lc_serif_ext}x{lc_bar_t}; accents placed {placed}")
+    slant = f"; re-slanted {source_angle:g}° → {font['post'].italicAngle:g}°" if italic else ""
+    print(f"{out}: {shared} glyphs took Verdana's metrics ({scaled} scaled){slant}; stem {stem}, I bars {bar_t}x{bar_ext}; J lift {lift}, shift {shift_J}, hook stretch {stretch_J:.2f}; j shift {shift_j}, stretch {stretch_j:.2f}, serif {lc_serif_ext}x{lc_bar_t}; accents placed {placed}; kerning pairs {len(kern_pairs)} kern, {len(gpos_pairs)} GPOS")
 
 if __name__ == "__main__":
     main()
