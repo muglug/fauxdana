@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""make_fauxdana.py DEJAVUSANS.ttf METRICS.json OUT.ttf [--bold] [--italic] [--accents ACCENTS.json]
+"""make_fauxdana.py DEJAVUSANS.ttf METRICS.json OUT.ttf [--bold] [--italic] [--accents ACCENTS.json] [--upright DEJAVUSANS-UPRIGHT.ttf]
 
 Derives a Verdana-metric-compatible face from DejaVu Sans (the built TTF of
 this repository's DejaVuSans.sfd / DejaVuSans-Bold.sfd) and the reference
 metrics extracted by extract_metrics.py: every glyph both
 fonts have takes Verdana's advance width and sits where Verdana's ink sits
 (centred within Verdana's ink box; scaled horizontally only when the ink
-widths differ by more than 3%). Capital I gets Verdana's top and bottom bars,
+widths differ by more than 5%). Capital I gets Verdana's top and bottom bars,
 capital J Verdana's long tail and right-hand stem with a top bar and the
 hook lifted onto the baseline (stroke weights untouched: the part below a
 cut through the straight stem moves up, only the flat stretch of the hook
@@ -19,8 +19,12 @@ with like and the caret slope and italic angle are the reference's; the
 letters are then un-slanted by that angle before they are reshaped and
 slanted back afterwards, so the lifted hook stays on its stem and the bars
 come out as parallelograms. Vertical metrics (hhea, OS/2) are Verdana's so
-line boxes match, and so are the underline, strikeout, subscript and
-superscript metrics and the average character width. DejaVu's own kerning
+line boxes match. Accented letters move exactly as their plain letter does;
+circles, squares, bullets and a few other symbols are scaled proportionally
+rather than stretched; Ĳ and ĳ are rebuilt from the finished letters; and
+characters the reference lacks keep DejaVu's drawing and advance, including
+those DejaVu builds from I, J or j. The underline, strikeout, subscript and
+superscript metrics and the average character width are Verdana's too. DejaVu's own kerning
 and layout tables are dropped; the reference's kerning pairs take their
 place, written to the same table(s) the reference carries them in (Verdana:
 a legacy 'kern' table in the regular face only), so every layout engine
@@ -42,7 +46,7 @@ from fontTools.pens.basePen import BasePen
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 
 FAMILY = "Fauxdana"
-VERSION = "1.100"
+VERSION = "1.102"
 
 class MapPen(BasePen):
     """Forwards an outline to another pen with every point run through fn."""
@@ -85,13 +89,14 @@ def upright_ink(glyf, name):
     ys = [y for _, y in coords]
     return min(xs), max(xs), min(ys), max(ys)
 
-def shear_all(font, glyph_set, shear):
+def shear_all(font, glyph_set, shear, keep=frozenset()):
     """Slants every outline further by `shear` (x += shear * y, about the
     baseline). Composites keep their structure where they can: a plain
     offset component moves with the shear of its offset; components that are
-    scaled, flipped or attached by anchor points are decomposed first."""
+    scaled, flipped or attached by anchor points are decomposed first.
+    Glyphs named in `keep` (those the oblique leaves upright) are untouched."""
     glyf, hmtx = font["glyf"], font["hmtx"]
-    order = font.getGlyphOrder()
+    order = [name for name in font.getGlyphOrder() if name not in keep]
     for name in order:
         g = glyf[name]
         if g.isComposite() and any(hasattr(c, "transform") or not hasattr(c, "x") for c in g.components):
@@ -134,7 +139,8 @@ def main():
     italic = "--italic" in argv
     style_key = {(False, False): "regular", (True, False): "bold", (False, True): "italic", (True, True): "boldItalic"}[(bold, italic)]
     accents_path = argv[argv.index("--accents") + 1] if "--accents" in argv else None
-    positional = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--accents")]
+    upright_path = argv[argv.index("--upright") + 1] if "--upright" in argv else None
+    positional = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] not in ("--accents", "--upright"))]
     src, metrics_path, out = positional
     font = TTFont(src)
     with open(metrics_path) as f:
@@ -150,9 +156,26 @@ def main():
     # Lean the oblique as far as the reference does before anything is
     # measured: compared at different slants, every tall glyph's ink looks
     # too narrow and would be stretched to make up the difference.
+    # DejaVu's oblique leaves some 1,500 glyphs upright (+ < = > | ° • ™,
+    # arrows, mathematical operators, box drawing and blocks; Verdana Italic
+    # keeps most of the ones it has upright too). Given the upright face
+    # (--upright), those whose outline is the same in both stay upright;
+    # without it, everything leans.
     source_angle = font["post"].italicAngle
     if italic and ref_slant and abs(ref_slant - SLANT) > 1e-6:
-        shear_all(font, glyph_set, ref_slant - SLANT)
+        keep = set()
+        if upright_path:
+            upright = TTFont(upright_path)
+            upright_set = upright.getGlyphSet()
+            for name in font.getGlyphOrder():
+                if name not in upright_set:
+                    continue
+                a, b = DecomposingRecordingPen(glyph_set), DecomposingRecordingPen(upright_set)
+                glyph_set[name].draw(a)
+                upright_set[name].draw(b)
+                if a.value and a.value == b.value:
+                    keep.add(name)
+        shear_all(font, glyph_set, ref_slant - SLANT, keep)
         SLANT = ref_slant
         font["post"].italicAngle = ref["italicAngle"]
     def ref_upright_width(code, height):
@@ -185,6 +208,42 @@ def main():
         advance, _ = hmtx[name]
         hmtx[name] = (advance, glyf[name].xMin if glyf[name].numberOfContours else 0)
 
+    # --- Before I, J and j are reshaped, decide which composites built from
+    # them should follow. Verdana builds Ι Ί Ϊ І Ї Ј ј and the accented I/J
+    # forms from its own I, J and j, so composites whose only letter is I, J
+    # or j inherit the reshaped letter. Everything else that uses them is
+    # flattened now, from DejaVu's plain letters: characters the reference
+    # lacks keep DejaVu's own drawing and advance (Roman numerals, the Ǉ/ǌ
+    # digraphs, polytonic Ἰ…: a Verdana-width I or J would overrun their
+    # DejaVu advance and collide), as does a letter that merely uses I as a
+    # stroke (Ы), and the letter pairs Ĳ and ĳ, which are rebuilt from the
+    # finished letters after the shared pass below.
+    first_code = {}
+    for code, gname in sorted(cmap.items()):
+        first_code.setdefault(gname, code)
+    ij_names = {cmap[ord("I")], cmap[ord("J")], cmap[ord("j")]}
+    def uses_ij(name):
+        g = glyf[name]
+        return g.isComposite() and any(c.glyphName in ij_names or uses_ij(c.glyphName) for c in g.components)
+    def letters(name):
+        g = glyf[name]
+        if g.isComposite():
+            return set().union(*(letters(c.glyphName) for c in g.components))
+        code = first_code.get(name)
+        is_letter = code is not None and unicodedata.category(chr(code)) in ("Lu", "Ll", "Lt", "Lo")
+        return {name} if name in ij_names or is_letter else set()
+    pairs = {}     # letter pairs (Ĳ, ĳ) → their letters, rebuilt after the shared pass
+    for name in font.getGlyphOrder():
+        if not uses_ij(name):
+            continue
+        code = first_code.get(name)
+        if code in rmetrics and len(letters(name)) == 1:
+            continue                       # inherits the reshaped I, J or j
+        parts = unicodedata.normalize("NFKD", chr(code)) if code is not None else ""
+        if code in rmetrics and len(parts) > 1 and all(ord(p) in rmetrics and ord(p) in cmap for p in parts):
+            pairs[code] = [ord(p) for p in parts]
+        rebuild(name)
+
     # --- Capital I: Verdana's serifs. Stem thickness from the plain stem.
     i_name, j_name = cmap[ord("I")], cmap[ord("J")]
     ix0, ix1, _, cap = upright_ink(glyf, i_name)
@@ -195,15 +254,17 @@ def main():
         rect(pen, ix0 - bar_ext, 0, ix1 + bar_ext, bar_t)
         rect(pen, ix0 - bar_ext, cap - bar_t, ix1 + bar_ext, cap)
     # DejaVu draws the accented capitals as their own outlines, so every
-    # glyph whose canonical decomposition starts with I (or J, below) gets the
-    # same treatment; their stems sit where the plain letter's does.
+    # glyph the reference has whose canonical decomposition starts with I (or
+    # J, below) gets the same treatment; their stems sit where the plain
+    # letter's does. Accented forms the reference lacks (Ǐ, Ȉ, ǰ…) keep their
+    # DejaVu drawing, which fits their DejaVu advance.
     def derived_from(base, base_name):
         # Accented forms drawn as their own outlines need the treatment;
         # composites that reference the (already treated) base letter only
-        # need decomposing, which the shared-glyph pass does.
+        # need decomposing, which happens just before the shared-glyph pass.
         out = []
         for code, gname in cmap.items():
-            if gname in (i_name, j_name, base_name):
+            if gname in (i_name, j_name, base_name) or code not in rmetrics:
                 continue
             decomposed = unicodedata.normalize("NFD", chr(code))
             if decomposed[0] != base or len(decomposed) == 1:
@@ -317,44 +378,208 @@ def main():
         rebuild(gname, fn=move_accent)
         placed += 1
 
-    # --- Every shared glyph: Verdana's advance, centred in Verdana's ink box,
-    # horizontally scaled when the ink widths differ by more than 3%.
-    shared, scaled = 0, 0
-    for code, name in sorted(cmap.items()):
-        values = rmetrics.get(code)
-        if values is None or name not in glyf:
+    # Other two-part compatibility characters DejaVu composes side by side
+    # from two characters the reference also has (Ŀ ŀ ‼ ″) are rebuilt from
+    # the finished parts the same way as Ĳ and ĳ, keeping DejaVu's vertical
+    # offsets (the raised dot of ŀ), rather than fitted as one shape, which
+    # would stretch or squeeze the letter inside them. (ŉ, whose apostrophe
+    # the reference lacks, follows its n like an accented letter, below.)
+    pairs = {code: [(part, 0) for part in parts] for code, parts in pairs.items()}
+    for code, gname in sorted(cmap.items()):
+        g = glyf[gname]
+        if code in pairs or code not in rmetrics or not ref_ink(code) or not g.isComposite() \
+                or len(g.components) != 2 or any(not hasattr(c, "x") or hasattr(c, "transform") for c in g.components):
             continue
-        radv = values[0]
-        rbox = ref_ink(code)
-        box = ink(glyf, hmtx, name)
-        if box is None or rbox is None:   # space-like glyphs: advance only
-            adv, lsb = hmtx[name]
-            hmtx[name] = (radv, lsb)
-            shared += 1
+        if len(unicodedata.normalize("NFD", chr(code))) != 1 or len(unicodedata.normalize("NFKD", chr(code))) < 2:
             continue
-        x0, x1, _, _ = box
-        rx0, rx1 = rbox
-        width, rwidth = x1 - x0, rx1 - rx0
-        # Scale the ink to Verdana's only when the proportions really differ
-        # and the glyph is more than a stem (stems, dots and bars would just
-        # change weight); clamp so shapes stay recognisably DejaVu.
-        sx = 1.0
-        if width > upem * 0.22 and abs(rwidth / width - 1) > 0.05:
-            sx = max(0.85, min(1.18, rwidth / width))
-            scaled += 1
-        new_width = width * sx
-        new_x0 = rx0 + (rwidth - new_width) / 2
-        dx = new_x0 - x0 * sx
-        rebuild(name, transform=(sx, 0, 0, 1, dx, 0))
-        hmtx[name] = (radv, round(glyf[name].xMin))
-        shared += 1
+        parts = [(first_code.get(c.glyphName), c.y) for c in sorted(g.components, key=lambda c: c.x)]
+        if all(p is not None and ref_ink(p) for p, _ in parts) and \
+                "".join(chr(p) for p, _ in parts) == unicodedata.normalize("NFKD", chr(code)):
+            pairs[code] = parts
 
-    # Glyphs not shared with Verdana keep DejaVu's outlines; decompose them
-    # too so nothing references a moved base glyph with stale offsets.
+    # Decompose every composite before any shared glyph moves: DejaVu builds
+    # accented letters from the spacing accents and base letters (ï is
+    # dotlessi + dieresis, É is E + Acute), and the shared pass below moves
+    # those parts into Verdana's ink boxes one code point at a time. A
+    # composite decomposed after its parts moved would inherit their new
+    # positions (ï's diaeresis would land where Verdana puts a lone ¨, far
+    # right of the stem), so each accented letter is flattened from DejaVu's
+    # own geometry first and then fitted to Verdana as a whole.
     for name in font.getGlyphOrder():
         g = glyf[name]
         if getattr(g, "isComposite", lambda: False)():
             rebuild(name)
+
+    # --- Every shared glyph: Verdana's advance, centred in Verdana's ink box,
+    # horizontally scaled when the ink widths differ by more than 5%. The
+    # fits are all measured first, on the outlines as they stand, and applied
+    # afterwards, so accented letters can borrow their base letter's.
+    # Circles, squares and bullets (and ©, ®, °, ™, ∞, whose shapes a one-way
+    # stretch would also distort) are scaled the same in both directions, about
+    # their vertical centre, so a round bullet stays round; scaled this way
+    # they land within a few units of Verdana's own heights.
+    def proportional(code):
+        return code in (0x00A9, 0x00AE, 0x00B0, 0x2022, 0x2122, 0x2219, 0x221E) or 0x25A0 <= code <= 0x25FF
+    def fit(code, name):
+        """(sx, dx, sy, dy) placing the glyph in the reference's ink box."""
+        rbox, box = ref_ink(code), ink(glyf, hmtx, name)
+        if box is None or rbox is None:   # space-like glyphs: advance only
+            return None
+        x0, x1, y0, y1 = box
+        rx0, rx1 = rbox
+        width, rwidth = x1 - x0, rx1 - rx0
+        if width <= 0:
+            return 1.0, rx0 + rwidth / 2 - x0, 1.0, 0.0
+        need = rwidth / width
+        # Scale the ink to Verdana's only when the proportions really differ
+        # and the glyph is more than a stem (stems, dots and bars would just
+        # change weight); clamp so shapes stay recognisably DejaVu.
+        sx = 1.0
+        if width > upem * 0.22 and abs(need - 1) > 0.05:
+            sx = max(0.85, min(1.18, need))
+        new_x0 = rx0 + (rwidth - width * sx) / 2
+        # Symbols whose shape is proportion, and anything the clamped stretch
+        # would leave spilling over its advance into the neighbouring
+        # characters (DejaVu's □ ● ₠ are far wider than Verdana's), take the
+        # reference's ink width exactly by scaling both ways; letter-like
+        # glyphs standing on the baseline stay on it.
+        radv = rmetrics[code][0]
+        spills = radv > 0 and unicodedata.category(chr(code)).startswith("S") and \
+            (new_x0 < min(0, rx0) - 40 or new_x0 + width * sx > max(radv, rx1) + 40)
+        if (proportional(code) and abs(need - 1) > 0.05) or spills:
+            anchor = 0.0 if spills and not proportional(code) and abs(y0) <= upem * 0.02 else (y0 + y1) / 2
+            return need, rx0 - x0 * need, need, anchor * (1 - need)
+        return sx, new_x0 - x0 * sx, 1.0, 0.0
+    fits = {code: fit(code, name) for code, name in cmap.items()
+            if code in rmetrics and name in glyf}
+
+    # Accented letters move exactly as their base letter does, as in Verdana,
+    # which keeps the letter's body where the plain letter has it (í's stem
+    # where ı's is, é's bowl where e's is) instead of centring body and accent
+    # together: centred as a whole, an accent that sits off to one side would
+    # drag the body the other way and could rescale it. The body stays put
+    # even when the accent widens the glyph on the right (ď, ľ, ť), and moves
+    # right by the extra advance when the accent stands to its left (Greek
+    # tonos capitals: Έ, Ό), which shows in the reference's ink boxes as a
+    # left edge that moved while the right edge moved by exactly the extra
+    # advance. The body is found as the base letter's outline intact in the
+    # accented one (ignoring the dot of i, j, Cyrillic і and ј); failing that (a ring or horn
+    # fused to the stroke), as the part of the outline at the base letter's
+    # mid-height when it is exactly as wide as the base letter there; failing
+    # that too (a horn widening the body), the glyph keeps its own fit.
+    def contours(name, below=None):
+        g = glyf[name]
+        if g.isComposite() or g.numberOfContours <= 0:
+            return []
+        out, start = [], 0
+        for end in g.endPtsOfContours:
+            # One- and two-point contours draw nothing (DejaVu leaves stray
+            # points in u and dotlessi, among others) and do not survive
+            # decomposition, so they cannot be part of the match.
+            pts = g.coordinates[start:end + 1]
+            if end - start >= 2 and (below is None or min(y for _, y in pts) < below):
+                out.append(frozenset((round(x), round(y)) for x, y in pts))
+            start = end + 1
+        return out
+    x_height = ink(glyf, hmtx, cmap[ord("x")])[3]
+    def body_offset(name, base_name, below=None):
+        """dx at which every contour of base_name (those starting below
+        `below`) occurs in name, else None."""
+        acc, base = contours(name), contours(base_name, below)
+        if not base:
+            return None
+        acc_set = set(acc)
+        first_min = min(x for x, _ in base[0])
+        for c in acc:
+            if len(c) != len(base[0]):
+                continue
+            dx = min(x for x, _ in c) - first_min
+            if all(frozenset((x + dx, y) for x, y in b) in acc_set for b in base):
+                return dx
+        return None
+    def zone_offset(name, base_name):
+        """dx between the outlines' extents across the middle half of the
+        base letter's height (clear of any join at its top or foot), when
+        they are equally wide there, else None."""
+        _, _, by0, by1 = ink(glyf, hmtx, base_name)
+        lo, hi = by0 + (by1 - by0) * 0.25, by0 + (by1 - by0) * 0.75
+        def span(n):
+            coords, _, _ = glyf[n].getCoordinates(glyf)
+            xs = [x for x, y in coords if lo <= y <= hi]
+            return (min(xs), max(xs)) if xs else None
+        a, b = span(name), span(base_name)
+        if a is None or b is None or abs((a[1] - a[0]) - (b[1] - b[0])) > 4:
+            return None
+        return a[0] - b[0]
+    follows = 0
+    letter_categories = ("Lu", "Ll", "Lt", "Lo")
+    for code in sorted(fits):
+        decomposed = unicodedata.normalize("NFD", chr(code))
+        if len(decomposed) == 1 and code not in pairs:
+            # A compatibility character that is one letter plus marks or
+            # punctuation (ŉ is ʼ + n) follows that letter the same way.
+            compat = unicodedata.normalize("NFKD", chr(code))
+            found_letters = [p for p in compat if unicodedata.category(p) in letter_categories]
+            if len(compat) > 1 and len(found_letters) == 1:
+                decomposed = found_letters[0] + compat.replace(found_letters[0], "", 1)
+        elif not all(unicodedata.category(m).startswith("M") for m in decomposed[1:]):
+            continue
+        if fits[code] is None or len(decomposed) < 2 or unicodedata.category(decomposed[0]) not in letter_categories:
+            continue
+        letter = decomposed[0]
+        tries = [(letter, None), ({"i": "ı", "j": "ȷ"}.get(letter), None)]
+        if letter.islower():
+            tries.append((letter, x_height * 0.95))     # without a dot over the x-height (ї is і + ¨)
+        found = None
+        for base, below in tries:
+            if base is not None and fits.get(ord(base)) is not None:
+                dx_src = body_offset(cmap[code], cmap[ord(base)], below)
+                if dx_src is not None:
+                    found = base, dx_src
+                    break
+        if found is None and fits.get(ord(letter)) is not None:
+            dx_src = zone_offset(cmap[code], cmap[ord(letter)])
+            if dx_src is not None:
+                found = letter, dx_src
+        if found is not None:
+            base, dx_src = found
+            sx, dx, sy, dy = fits[ord(base)]
+            extra = rmetrics[code][0] - rmetrics[ord(base)][0]
+            (ax0, ax1), (bx0, bx1) = ref_ink(code), ref_ink(ord(base))
+            accent_on_left = extra and abs(ax0 - bx0) > 2 and abs((ax1 - bx1) - extra) <= 2
+            body_shift = extra if accent_on_left else 0
+            fits[code] = (sx, dx + body_shift - sx * dx_src, sy, dy)
+            follows += 1
+
+    shared, scaled = 0, 0
+    for code, name in sorted(cmap.items()):
+        if code not in fits:
+            continue
+        radv = rmetrics[code][0]
+        if fits[code] is None:
+            hmtx[name] = (radv, hmtx[name][1])
+        else:
+            sx, dx, sy, dy = fits[code]
+            scaled += sx != 1.0
+            rebuild(name, transform=(sx, 0, 0, sy, dx, dy))
+            hmtx[name] = (radv, round(glyf[name].xMin))
+        shared += 1
+
+    # --- Letter pairs (Ĳ ĳ Ŀ ŀ ‼ ″) as the reference draws them: its
+    # finished parts side by side, the first at the left of the pair's ink box
+    # and the last at its right (Verdana: I + J 10 units tighter than I's advance).
+    for code, parts in pairs.items():
+        name, (rx0, rx1) = cmap[code], ref_ink(code)
+        pen = TTGlyphPen(None)
+        for k, (part, raise_by) in enumerate(parts):
+            px0, px1 = ref_ink(part)
+            shift = rx0 - px0 if k == 0 else rx1 - px1
+            recording = DecomposingRecordingPen(glyph_set)
+            glyph_set[cmap[part]].draw(recording)
+            recording.replay(TransformPen(pen, (1, 0, 0, 1, shift, raise_by)))
+        glyf[name] = pen.glyph()
+        glyf[name].recalcBounds(glyf)
+        hmtx[name] = (rmetrics[code][0], glyf[name].xMin)
 
     # Side bearings follow the outlines everywhere (TrueType convention).
     for name in font.getGlyphOrder():
@@ -389,6 +614,20 @@ def main():
         addOpenTypeFeaturesFromString(font, "languagesystem DFLT dflt;\nlanguagesystem latn dflt;\n"
                                             f"feature kern {{\n{rules}\n}} kern;\n")
 
+    # --- Code points the reference maps to the same glyph as another one and
+    # has no measurements of their own (Verdana 2.35 shows its fi and fl at
+    # the private-use U+F001 and U+F002 too) map to Fauxdana's glyph for that
+    # other code point, replacing whatever DejaVu put there.
+    aliased = 0
+    for alias, target in ref.get("aliases", {}).items():
+        a, t = int(alias, 16), int(target, 16)
+        if a in rmetrics or t not in cmap:
+            continue
+        for table in font["cmap"].tables:
+            if table.isUnicode() and (a <= 0xFFFF or table.format in (12, 13)):
+                table.cmap[a] = cmap[t]
+        aliased += 1
+
     # --- Names.
     style = {"regular": "Regular", "bold": "Bold", "italic": "Italic", "boldItalic": "Bold Italic"}[style_key]
     name_table = font["name"]
@@ -412,7 +651,7 @@ def main():
     font.recalcTimestamp = False
     font.save(out)
     slant = f"; re-slanted {source_angle:g}° → {font['post'].italicAngle:g}°" if italic else ""
-    print(f"{out}: {shared} glyphs took Verdana's metrics ({scaled} scaled){slant}; stem {stem}, I bars {bar_t}x{bar_ext}; J lift {lift}, shift {shift_J}, hook stretch {stretch_J:.2f}; j shift {shift_j}, stretch {stretch_j:.2f}, serif {lc_serif_ext}x{lc_bar_t}; accents placed {placed}; kerning pairs {len(kern_pairs)} kern, {len(gpos_pairs)} GPOS")
+    print(f"{out}: {shared} glyphs took Verdana's metrics ({scaled} scaled, {follows} placed as their base letter, {len(pairs)} pairs rebuilt, {aliased} aliases){slant}; stem {stem}, I bars {bar_t}x{bar_ext}; J lift {lift}, shift {shift_J}, hook stretch {stretch_J:.2f}; j shift {shift_j}, stretch {stretch_j:.2f}, serif {lc_serif_ext}x{lc_bar_t}; accents placed {placed}; kerning pairs {len(kern_pairs)} kern, {len(gpos_pairs)} GPOS")
 
 if __name__ == "__main__":
     main()

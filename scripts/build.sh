@@ -12,5 +12,7 @@ metrics="$root/verdana-metrics.json"
 accents="$root/verdana-accents.json"
 $make "$src/DejaVuSans.ttf"             "$metrics" "$root/ttfs/Fauxdana-Regular.ttf"                   --accents "$accents"
 $make "$src/DejaVuSans-Bold.ttf"        "$metrics" "$root/ttfs/Fauxdana-Bold.ttf"       --bold          --accents "$accents"
-$make "$src/DejaVuSans-Oblique.ttf"     "$metrics" "$root/ttfs/Fauxdana-Italic.ttf"     --italic        --accents "$accents"
-$make "$src/DejaVuSans-BoldOblique.ttf" "$metrics" "$root/ttfs/Fauxdana-BoldItalic.ttf" --bold --italic --accents "$accents"
+# The obliques get their upright face too: glyphs DejaVu leaves upright in
+# the oblique stay upright when it is re-slanted to Verdana's angle.
+$make "$src/DejaVuSans-Oblique.ttf"     "$metrics" "$root/ttfs/Fauxdana-Italic.ttf"     --italic        --accents "$accents" --upright "$src/DejaVuSans.ttf"
+$make "$src/DejaVuSans-BoldOblique.ttf" "$metrics" "$root/ttfs/Fauxdana-BoldItalic.ttf" --bold --italic --accents "$accents" --upright "$src/DejaVuSans-Bold.ttf"

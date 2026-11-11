@@ -4,9 +4,9 @@
 Reads the metrics Fauxdana reproduces from a reference family: per code
 point the advance width and ink box (xMin, xMax) of each weight; the hhea /
 OS/2 vertical metrics and caret slope; the underline, strikeout, subscript
-and superscript metrics and the average character width; and the kerning
-pairs, so the face can be rebuilt from the JSON without the reference font
-at hand. Kerning is recorded per code point pair, separately for the legacy
+and superscript metrics and the average character width; the kerning pairs;
+and the code points that share a glyph with another ("aliases"), so the
+face can be rebuilt from the JSON without the reference font at hand. Kerning is recorded per code point pair, separately for the legacy
 'kern' table ("kern") and the GPOS 'kern' feature ("gposKern"), because
 layout engines differ in which of the two they read and the build reproduces
 exactly the tables the reference carries.
@@ -135,6 +135,18 @@ def metrics(path):
     for key, pairs in (("kern", legacy_kern(font)), ("gposKern", gpos_kern(font))):
         if pairs:
             data[key] = by_code_point(pairs, cmap)
+    # Code points sharing one glyph: each extra one is recorded as an alias
+    # of the lowest code point outside the private use area mapped to it.
+    by_glyph = defaultdict(list)
+    for code, name in cmap.items():
+        by_glyph[name].append(code)
+    aliases = {}
+    for codes in by_glyph.values():
+        public = sorted(c for c in codes if not 0xE000 <= c <= 0xF8FF)
+        if len(codes) > 1 and public:
+            aliases.update({f"{c:04X}": f"{public[0]:04X}" for c in codes if c != public[0]})
+    if aliases:
+        data["aliases"] = aliases
     return data
 
 
